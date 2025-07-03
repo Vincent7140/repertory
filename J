@@ -50,3 +50,100 @@ for i in range(N_iterations):
 
     # suite: training avec train_ray_batch comme d’habitude
 
+
+
+
+
+
+def train_model(model, optimizer, N_iterations, arg_dict, train_rays, sc_train_rays=None, decrease_noise=True, eval_dataset=None):
+    """
+    Entraînement S-NeRF avec échantillonnage équilibré : même nombre de rayons par image.
+    """
+    N_rand = arg_dict['train.n_rand']
+    N_images = len(train_rays)
+    N_rand_per_image = N_rand // N_images
+    raw_noise_std_init = tf.convert_to_tensor((arg_dict["train.noise.sigma"], arg_dict["train.noise.shad"]), dtype=def_dtype)
+    raw_noise_std = raw_noise_std_init
+
+    # Shuffle initial des rayons par image
+    train_rays = [render.shuffle_rays(r) for r in train_rays]
+    i_batch_per_img = [0 for _ in range(N_images)]
+
+    if sc_train_rays is not None:
+        i_batch_sc = 0
+        N_sc_train_rays = sc_train_rays['rays_o'].shape[0]
+        sc_train_rays = render.shuffle_rays(sc_train_rays)
+        lambda_sc = arg_dict["train.shad.lambda"]
+        sc_arg_dict = arg_dict.copy()
+        sc_arg_dict['rend.nsamples'] += arg_dict['rend.nimportance']
+        sc_arg_dict['rend.nimportance'] = 0
+
+    loss_log = []
+    scores = []
+    print("Begin training")
+    grad_vars = model['model'].trainable_variables
+
+    for i in range(N_iterations):
+        ray_batches = []
+        for img_idx in range(N_images):
+            rays = train_rays[img_idx]
+            start = i_batch_per_img[img_idx]
+            end = start + N_rand_per_image
+
+            # Si on dépasse, reshuffle et recommence
+            if end > rays['rays_o'].shape[0]:
+                rays = render.shuffle_rays(rays)
+                train_rays[img_idx] = rays
+                start = 0
+                end = N_rand_per_image
+                i_batch_per_img[img_idx] = 0
+
+            ray_batch = render.get_ray_batch(rays, start, end)
+            ray_batches.append(ray_batch)
+            i_batch_per_img[img_idx] += N_rand_per_image
+
+        # Concaténer les rayons de toutes les images
+        train_ray_batch = ray_batches[0]
+        for rb in ray_batches[1:]:
+            train_ray_batch = render.concat_rays(train_ray_batch, rb)
+
+        if sc_train_rays is not None:
+            if i_batch_sc + N_rand > N_sc_train_rays:
+                sc_train_rays = render.shuffle_rays(sc_train_rays)
+                i_batch_sc = 0
+            sc_train_ray_batch = render.get_ray_batch(sc_train_rays, i_batch_sc, i_batch_sc + N_rand)
+            i_batch_sc += N_rand
+
+        if decrease_noise:
+            raw_noise_std = raw_noise_std_init * (1 - i / N_iterations)
+
+        with tf.GradientTape() as tape:
+            ret_dict_c = render.render_rays(model, arg_dict, train_ray_batch, rand=True,
+                                            raw_noise_std=raw_noise_std, rets=['rgb'])
+            rgb_loss = tf.reduce_mean(tf.square(ret_dict_c['rgb'] - train_ray_batch['values']))
+            loss = rgb_loss
+
+            if sc_train_rays is not None:
+                ret_dict_sc = render.render_rays(model, sc_arg_dict, sc_train_ray_batch, rand=True,
+                                                 raw_noise_std=(0.0, raw_noise_std[1]),
+                                                 rets=['ret_sun', 'ret_shadow_loss'])
+                s_loss = (tf.reduce_mean(ret_dict_sc['ret_shadow_loss']) +
+                          tf.reduce_mean(1.0 - ret_dict_sc['ret_sun'])) * lambda_sc
+                loss += s_loss
+
+        gradients = tape.gradient(loss, grad_vars)
+        optimizer.apply_gradients(zip(gradients, grad_vars))
+
+        # Logging
+        loss_log.append(f"{i} {rgb_loss} {s_loss if sc_train_rays is not None else ''}\n")
+        if (i < 10) or (i % 25 == 0):
+            rgb_psnr = -10. * tf.math.log(rgb_loss) / tf.math.log(10.)
+            print(f"{i} {rgb_psnr} {s_loss if sc_train_rays is not None else ''}")
+        if (eval_dataset is not None) and (arg_dict['out.iplot'] > 0) and (i % arg_dict['out.iplot'] == 0):
+            dataset_rend = render.render_dataset(eval_dataset, model, ['rgb'], arg_dict)
+            train, test, alt = test_model(model, eval_dataset, dataset_rend, arg_dict)
+            scores.append((i, (train, test, alt)))
+            print(f"Test {i}")
+            print(f"{test} {alt}")
+
+    return model, loss_log, scores
