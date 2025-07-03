@@ -1,0 +1,52 @@
+# À la fin de generate_train_rays
+all_train = []
+for i in range(len(all_values_list)):
+    train = {
+        'rays_o': tf.reshape(all_rays_o[i], [-1, 3]),
+        'rays_d': tf.reshape(all_rays_d[i], [-1, 3]),
+        'values': tf.reshape(all_values_list[i], [-1, nbands]),
+    }
+    if use_view_dirs:
+        train['view_dirs'] = tf.reshape(all_view_dirs[i], [-1, 2])
+    if use_light_dirs:
+        train['light_dirs'] = tf.reshape(all_light_dirs[i], [-1, 2])
+    all_train.append(train)
+return all_train
+
+
+
+N_images = len(train_rays)  # train_rays devient une liste de dicts
+N_rand_per_image = N_rand // N_images
+
+# Initialisation
+i_batch_per_img = [0 for _ in range(N_images)]
+
+# Pré-mélange des rayons
+train_rays = [render.shuffle_rays(rays) for rays in train_rays]
+
+for i in range(N_iterations):
+    # Récupérer N_rand_per_image rayons de chaque image
+    ray_batches = []
+    for idx in range(N_images):
+        rays = train_rays[idx]
+        start = i_batch_per_img[idx]
+        end = start + N_rand_per_image
+
+        if end > rays['rays_o'].shape[0]:
+            rays = render.shuffle_rays(rays)
+            train_rays[idx] = rays
+            start = 0
+            end = N_rand_per_image
+            i_batch_per_img[idx] = 0
+
+        ray_batch = render.get_ray_batch(rays, start, end)
+        ray_batches.append(ray_batch)
+        i_batch_per_img[idx] += N_rand_per_image
+
+    # Concaténer les rayons issus de chaque image
+    train_ray_batch = render.concat_rays(ray_batches[0], ray_batches[1])
+    for rb in ray_batches[2:]:
+        train_ray_batch = render.concat_rays(train_ray_batch, rb)
+
+    # suite: training avec train_ray_batch comme d’habitude
+
