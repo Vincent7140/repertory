@@ -147,3 +147,23 @@ def train_model(model, optimizer, N_iterations, arg_dict, train_rays, sc_train_r
             print(f"{test} {alt}")
 
     return model, loss_log, scores
+
+
+
+
+for img_idx in range(N_images):
+    n_rays = N_rand_per_image_list[img_idx]
+    rays = train_rays[img_idx]
+    start = i_batch_per_img[img_idx]
+    end = start + n_rays
+
+    if end > rays['rays_o'].shape[0]:
+        rays = render.shuffle_rays(rays)
+        train_rays[img_idx] = rays
+        start = 0
+        end = n_rays
+        i_batch_per_img[img_idx] = 0
+
+    ray_batch = render.get_ray_batch(rays, start, end)
+    ray_batches.append(ray_batch)
+    i_batch_per_img[img_idx] += n_rays
