@@ -1,0 +1,27 @@
+import pandas as pd
+import numpy as np
+from itertools import combinations
+
+df = pd.read_csv("output_JAX_260_df1_md.txt", delim_whitespace=True)
+
+def sph_to_cart(az_deg, el_deg, r=1.0):
+    az = np.radians(az_deg)
+    el = np.radians(el_deg)
+    x = r * np.cos(el) * np.cos(az)
+    y = r * np.cos(el) * np.sin(az)
+    z = r * np.sin(el)
+    return np.array([x, y, z])
+
+distances = []
+for (idx1, row1), (idx2, row2) in combinations(df.iterrows(), 2):
+    v1 = sph_to_cart(row1["Az"], row1["El"])
+    v2 = sph_to_cart(row2["Az"], row2["El"])
+    dot_product = np.clip(np.dot(v1, v2), -1.0, 1.0)  # sécurise arccos
+    angle_rad = np.arccos(dot_product)
+    angle_deg = np.degrees(angle_rad)
+    distances.append((row1["ID"], row2["ID"], angle_deg))
+
+distances_sorted = sorted(distances, key=lambda x: x[2], reverse=True)
+
+df_angular = pd.DataFrame(distances_sorted, columns=["ID_1", "ID_2", "Angular_Distance_deg"])
+print(df_angular.head(10))
