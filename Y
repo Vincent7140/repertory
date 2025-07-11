@@ -1,0 +1,66 @@
+def compute_samples_around_depth_tf(pred_depth, pred_weight, z_vals, N_samples, near, far):
+    """
+    Guided sampling: sample new depths around predicted depth using 3 sigma intervals.
+    
+    Args:
+        pred_depth (Tensor[N_rays]): predicted depth
+        pred_weight (Tensor[N_rays, N_samples]): weights of samples
+        z_vals (Tensor[N_rays, N_samples]): initial sample depths
+        N_samples (int): number of new samples to draw
+        near, far (float): depth limits
+
+    Returns:
+        z_vals_guided (Tensor[N_rays, N_samples]): guided sampled depths
+    """
+    sampling_std = tf.sqrt(tf.reduce_sum((z_vals - pred_depth[..., None]) ** 2 * pred_weight, axis=-1))
+
+    depth_min = tf.clip_by_value(pred_depth - 3.0 * sampling_std, clip_value_min=near, clip_value_max=far)
+    depth_max = tf.clip_by_value(pred_depth + 3.0 * sampling_std, clip_value_min=near, clip_value_max=far)
+
+    t_vals = tf.linspace(0., 1., N_samples)
+    t_vals = tf.reshape(t_vals, [1, N_samples])  # broadcastable
+    z_vals_guided = depth_min[..., None] * (1. - t_vals) + depth_max[..., None] * t_vals
+
+    return z_vals_guided
+
+
+
+def render_rays(..., guided_sampling=False, ...):
+
+
+# Fine rendering
+if fine_render:
+    z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
+    z_samples = None
+
+    if guided_sampling:
+        # Use guided sampling instead of importance sampling
+        pred_depth = tf.reduce_sum(z_vals * ret_dict_coarse['weights'], axis=-1)
+        z_samples = compute_samples_around_depth_tf(
+            pred_depth,
+            ret_dict_coarse['weights'],
+            z_vals,
+            N_importance,
+            tf.reduce_min(z_vals),
+            tf.reduce_max(z_vals)
+        )
+    else:
+        z_samples = sample_pdf(z_vals_mid, ret_dict_coarse['weights'][..., 1:-1], N_importance, det=True)
+
+    z_samples = tf.stop_gradient(z_samples)
+    z_vals = tf.sort(tf.concat([z_vals, z_samples], -1), -1)
+
+    pts = ray_batch['rays_o'][..., None, :] + ray_batch['rays_d'][..., None, :] * z_vals[..., :, None]
+    pts_flat = tf.reshape(pts, [-1, 3])
+
+
+
+ret_dict_c = render.render_rays(
+    model, arg_dict, train_ray_batch,
+    rand=True,
+    raw_noise_std=raw_noise_std,
+    rets=['rgb'],
+    guided_sampling=arg_dict.get('rend.guided_sampling', False)
+)
+
+python train.py --config config.txt --rend.guided_sampling True
