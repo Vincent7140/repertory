@@ -79,82 +79,64 @@ for _, row in df_combined.iterrows():
 origin_ecef = np.array(origin_ecef)
 satellite_ecef = np.array(satellite_ecef)
 
-# === 4. Conversion ECEF → ENU manuelle ===
-def ecef_to_enu(ecef_coords, ref_coords, lat_ref, lon_ref):
-    lat = np.radians(lat_ref)
-    lon = np.radians(lon_ref)
-    sin_lat = np.sin(lat)
-    cos_lat = np.cos(lat)
-    sin_lon = np.sin(lon)
-    cos_lon = np.cos(lon)
-
-    R = np.array([
-        [-sin_lon,              cos_lon,               0],
-        [-sin_lat * cos_lon,  -sin_lat * sin_lon,     cos_lat],
-        [ cos_lat * cos_lon,   cos_lat * sin_lon,     sin_lat]
-    ])
-
-    delta = ecef_coords - ref_coords
-    return delta @ R.T
-
-# Référence ENU
-ref_lat = df_combined["Latitude Offset"].mean()
-ref_lon = df_combined["Longitude Offset"].mean()
-ref_alt = df_combined["Height Offset"].mean()
-ref_x, ref_y, ref_z = transformer.transform(ref_lon, ref_lat, ref_alt)
-ref_coords = np.array([ref_x, ref_y, ref_z])
-
-satellite_enu = np.array([ecef_to_enu(p, ref_coords, ref_lat, ref_lon) for p in satellite_ecef])
-ground_enu = np.array([ecef_to_enu(p, ref_coords, ref_lat, ref_lon) for p in origin_ecef])
-
-# === 4b. Point moyen des points au sol en ECEF et ENU ===
+# === 4. Repère local verticalisé basé sur ECEF ===
 center_ecef = np.mean(origin_ecef, axis=0)
-center_enu = ecef_to_enu(center_ecef, ref_coords, ref_lat, ref_lon)
+origin = center_ecef
 
+z_axis = center_ecef / np.linalg.norm(center_ecef)
+tmp = np.array([0, 0, 1]) if not np.allclose(z_axis, [0, 0, 1]) else np.array([1, 0, 0])
+x_axis = np.cross(tmp, z_axis)
+x_axis /= np.linalg.norm(x_axis)
+y_axis = np.cross(z_axis, x_axis)
+R = np.vstack([x_axis, y_axis, z_axis]).T  # 3x3
 
-# === 5. Visualisation ENU : vers le point moyen ===
+def ecef_to_local(points_ecef, origin_ecef, R):
+    return (points_ecef - origin_ecef) @ R
+
+satellite_local = ecef_to_local(satellite_ecef, origin, R)
+ground_local = ecef_to_local(origin_ecef, origin, R)
+
+# === 5. Visualisation avec Z = Altitude ===
 fig = plt.figure(figsize=(12, 9))
 ax = fig.add_subplot(111, projection='3d')
-ax.view_init(elev=60, azim=180)
-# Satellite vers point moyen
+ax.view_init(elev=30, azim=135)
+
+# Vecteurs vers le point moyen
+vectors = -satellite_local
+
+# Affichage : X = Est local, Y = Nord local, Z = Altitude (Up)
 ax.scatter(
-    satellite_enu[:, 0],  # Est → X
-    satellite_enu[:, 2],  # Up → Y
-    satellite_enu[:, 1],  # Nord → Z
+    satellite_local[:, 0],  # X
+    satellite_local[:, 1],  # Y
+    satellite_local[:, 2],  # Z (Altitude)
     color='red', s=40, label='Satellite'
 )
-
-vectors_to_center = center_enu - satellite_enu
 ax.quiver(
-    satellite_enu[:, 0], satellite_enu[:, 2], satellite_enu[:, 1],  # origine (Est, Up, Nord)
-    vectors_to_center[:, 0], vectors_to_center[:, 2], vectors_to_center[:, 1],  # vecteur (Est, Up, Nord)
+    satellite_local[:, 0], satellite_local[:, 1], satellite_local[:, 2],
+    vectors[:, 0], vectors[:, 1], vectors[:, 2],
     color='purple', arrow_length_ratio=0.0, linewidth=1.5, label='Vers point moyen'
 )
 
-# Point moyen
-ax.scatter(center_enu[0], center_enu[2], center_enu[1], color='orange', s=80, marker='X', label='Point moyen')
-
 # Points au sol
 ax.scatter(
-    ground_enu[:, 0],  # Est → X
-    ground_enu[:, 2],  # Up → Y
-    ground_enu[:, 1],  # Nord → Z
-    color='green', s=20, label='Point au sol'
+    ground_local[:, 0],
+    ground_local[:, 1],
+    ground_local[:, 2],
+    color='green', s=20, label='Points au sol'
 )
 
-# ID texte
-for i, pos in enumerate(satellite_enu):
-    ax.text(pos[0], pos[2], pos[1], str(df_combined["ID"].iloc[i]), color='black', fontsize=8)
+# Point moyen
+ax.scatter(0, 0, 0, color='orange', s=80, marker='X', label='Point moyen')
 
-# Affichage
+# ID
+for i, pos in enumerate(satellite_local):
+    ax.text(pos[0], pos[1], pos[2], str(df_combined["ID"].iloc[i]), color='black', fontsize=8)
+
+# Axes
+ax.set_xlabel("Local X (m)")
+ax.set_ylabel("Local Y (m)")
+ax.set_zlabel("Altitude (m)")
+ax.set_title("Représentation verticalisée (Z = altitude réelle)")
 ax.legend(loc='upper right')
-ax.set_title("Satellites et visées vers le point moyen (ENU)")
-ax.set_xlabel("Est (m)")
-ax.set_ylabel("Up (m)")     # ← Up est maintenant l'axe vertical !
-ax.set_zlabel("Nord (m)")
-
-ax.set_zlim(bottom=0)
-
 plt.tight_layout()
 plt.show()
-

@@ -3,6 +3,7 @@ import numpy as np
 from pyproj import Transformer
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_interactions import ioff, panhandler, zoom_factory
 
 # === 1. Données : Valeurs centrales RPC ===
 valeurs_centrales_data = {
@@ -82,36 +83,46 @@ for _, row in df_combined.iterrows():
 origin_ecef = np.array(origin_ecef)
 satellite_ecef = np.array(satellite_ecef)
 vectors = np.array(vectors)
+# === 4b. Calcul du point moyen des points au sol (en ECEF) ===
+center_point = np.mean(origin_ecef, axis=0)
 
 # === 5. Visualisation ===
+# === 5. Visualisation : vecteurs vers le point moyen ===
 fig = plt.figure(figsize=(12, 9))
 ax = fig.add_subplot(111, projection='3d')
 
 # Points satellites
 ax.scatter(satellite_ecef[:, 0], satellite_ecef[:, 1], satellite_ecef[:, 2], color='red', s=40, label='Satellite')
 
-# Vecteurs (sans flèches)
+# Vecteurs vers le point moyen
+vectors_to_center = center_point - satellite_ecef
 ax.quiver(
     satellite_ecef[:, 0], satellite_ecef[:, 1], satellite_ecef[:, 2],
-    origin_ecef[:, 0] - satellite_ecef[:, 0],
-    origin_ecef[:, 1] - satellite_ecef[:, 1],
-    origin_ecef[:, 2] - satellite_ecef[:, 2],
-    color='blue', arrow_length_ratio=0.0, linewidth=1, label='Direction de visée'
+    vectors_to_center[:, 0], vectors_to_center[:, 1], vectors_to_center[:, 2],
+    color='purple', arrow_length_ratio=0, linewidth=1.5, label='Vers point moyen'
 )
 
-# Points au sol
-ax.scatter(origin_ecef[:, 0], origin_ecef[:, 1], origin_ecef[:, 2], color='green', s=20, label='Point au sol')
+# Point moyen (en ECEF)
+ax.scatter(center_point[0], center_point[1], center_point[2], color='orange', s=80, label='Point moyen', marker='X')
 
-# ID
+# ID des satellites (facultatif)
 for i, pos in enumerate(satellite_ecef):
     ax.text(pos[0], pos[1], pos[2], str(df_combined["ID"].iloc[i]), color='black', fontsize=8)
 
-# Affichage
+# Axes
 ax.legend(loc='upper right')
-ax.set_title("Satellites et vecteurs de visée vers le sol (ECEF)")
+ax.set_title("Vecteurs des satellites vers le point moyen (ECEF)")
 ax.set_xlabel("X (m)")
 ax.set_ylabel("Y (m)")
 ax.set_zlabel("Z (m)")
-ax.set_zlim(bottom=origin_ecef[:, 2].min() - 1000)
+
+# Ajuster l’échelle
+all_points = np.vstack((satellite_ecef, origin_ecef, [center_point]))
+margin = 1000
+ax.set_xlim(all_points[:, 0].min() - margin, all_points[:, 0].max() + margin)
+ax.set_ylim(all_points[:, 1].min() - margin, all_points[:, 1].max() + margin)
+ax.set_zlim(all_points[:, 2].min() - margin, all_points[:, 2].max() + margin)
+
 plt.tight_layout()
 plt.show()
+

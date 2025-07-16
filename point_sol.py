@@ -3,8 +3,9 @@ import numpy as np
 from pyproj import Transformer
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_interactions import ioff, panhandler, zoom_factory
 
-# === 1. Données centrales RPC ===
+# === 1. Données : Valeurs centrales RPC ===
 valeurs_centrales_data = {
     "ID": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
            11, 12, 13, 14, 15, 16, 18, 19, 20, 22, 23, 25, 26],
@@ -26,7 +27,7 @@ valeurs_centrales_data = {
 }
 df_valeurs = pd.DataFrame(valeurs_centrales_data)
 
-# === 2. Données angulaires ===
+# === 2. Données : Azimuth et Élévation ===
 angle_data = {
     "ID": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
            11, 12, 13, 14, 15, 16, 18, 19, 20, 21,
@@ -50,16 +51,18 @@ angle_data = {
 }
 df_angles = pd.DataFrame(angle_data)
 
-# Fusion
+# === 3. Fusion ===
 df_angles = df_angles[df_angles["ID"].isin(df_valeurs["ID"])]
 df_combined = df_valeurs.merge(df_angles, on="ID")
 
-# === 3. Estimation position satellite ===
+# === 4. Transformation ECEF et estimation satellite ===
 transformer = Transformer.from_crs("epsg:4326", "epsg:4978", always_xy=True)
-sat_alt = 617000
+sat_alt = 617000  # Altitude estimée
 
 satellite_ecef = []
 origin_ecef = []
+vectors = []
+
 for _, row in df_combined.iterrows():
     lon, lat, alt = row["Longitude Offset"], row["Latitude Offset"], row["Height Offset"]
     az, el = row["Az"], row["El"]
@@ -75,11 +78,15 @@ for _, row in df_combined.iterrows():
 
     origin_ecef.append(ground_point)
     satellite_ecef.append(sat_pos)
+    vectors.append(sat_pos - ground_point)
 
 origin_ecef = np.array(origin_ecef)
 satellite_ecef = np.array(satellite_ecef)
+vectors = np.array(vectors)
+# === 4b. Calcul du point moyen des points au sol (en ECEF) ===
+center_point = np.mean(origin_ecef, axis=0)
 
-# === 4. Conversion ECEF → ENU manuelle ===
+# === 4c. Conversion des points au sol vers ENU ===
 def ecef_to_enu(ecef_coords, ref_coords, lat_ref, lon_ref):
     lat = np.radians(lat_ref)
     lon = np.radians(lon_ref)
@@ -88,73 +95,61 @@ def ecef_to_enu(ecef_coords, ref_coords, lat_ref, lon_ref):
     sin_lon = np.sin(lon)
     cos_lon = np.cos(lon)
 
+    # Matrice de rotation ECEF → ENU
     R = np.array([
-        [-sin_lon,              cos_lon,               0],
-        [-sin_lat * cos_lon,  -sin_lat * sin_lon,     cos_lat],
-        [ cos_lat * cos_lon,   cos_lat * sin_lon,     sin_lat]
+        [-sin_lon,             cos_lon,              0],
+        [-sin_lat * cos_lon, -sin_lat * sin_lon,    cos_lat],
+        [ cos_lat * cos_lon,  cos_lat * sin_lon,    sin_lat]
     ])
 
     delta = ecef_coords - ref_coords
     return delta @ R.T
 
-# Référence ENU
+# Référence locale (moyenne des points)
 ref_lat = df_combined["Latitude Offset"].mean()
 ref_lon = df_combined["Longitude Offset"].mean()
 ref_alt = df_combined["Height Offset"].mean()
+
 ref_x, ref_y, ref_z = transformer.transform(ref_lon, ref_lat, ref_alt)
 ref_coords = np.array([ref_x, ref_y, ref_z])
 
-satellite_enu = np.array([ecef_to_enu(p, ref_coords, ref_lat, ref_lon) for p in satellite_ecef])
-ground_enu = np.array([ecef_to_enu(p, ref_coords, ref_lat, ref_lon) for p in origin_ecef])
+# Conversion
+origin_enu = np.array([ecef_to_enu(p, ref_coords, ref_lat, ref_lon) for p in origin_ecef])
 
-# === 4b. Point moyen des points au sol en ECEF et ENU ===
-center_ecef = np.mean(origin_ecef, axis=0)
-center_enu = ecef_to_enu(center_ecef, ref_coords, ref_lat, ref_lon)
-
-
-# === 5. Visualisation ENU : vers le point moyen ===
-fig = plt.figure(figsize=(12, 9))
+# === 5. Visualisation ENU ===
+fig = plt.figure(figsize=(10, 8))
 ax = fig.add_subplot(111, projection='3d')
-ax.view_init(elev=60, azim=180)
-# Satellite vers point moyen
+
+# Points au sol en ENU
 ax.scatter(
-    satellite_enu[:, 0],  # Est → X
-    satellite_enu[:, 2],  # Up → Y
-    satellite_enu[:, 1],  # Nord → Z
-    color='red', s=40, label='Satellite'
+    origin_enu[:, 0]/1000,  # Est
+    origin_enu[:, 1]/1000,  # Nord
+    origin_enu[:, 2]/1000,  # Up
+    color='green',
+    s=30,
+    label='Point au sol'
 )
 
-vectors_to_center = center_enu - satellite_enu
-ax.quiver(
-    satellite_enu[:, 0], satellite_enu[:, 2], satellite_enu[:, 1],  # origine (Est, Up, Nord)
-    vectors_to_center[:, 0], vectors_to_center[:, 2], vectors_to_center[:, 1],  # vecteur (Est, Up, Nord)
-    color='purple', arrow_length_ratio=0.0, linewidth=1.5, label='Vers point moyen'
-)
+# ID des points
+for i, pos in enumerate(origin_enu):
+    ax.text(pos[0], pos[1], pos[2], str(df_combined["ID"].iloc[i]), color='black', fontsize=8)
 
-# Point moyen
-ax.scatter(center_enu[0], center_enu[2], center_enu[1], color='orange', s=80, marker='X', label='Point moyen')
+# Axes centrés
+x_min, x_max = origin_enu[:, 0].min(), origin_enu[:, 0].max()
+y_min, y_max = origin_enu[:, 1].min(), origin_enu[:, 1].max()
+z_min, z_max = origin_enu[:, 2].min(), origin_enu[:, 2].max()
 
-# Points au sol
-ax.scatter(
-    ground_enu[:, 0],  # Est → X
-    ground_enu[:, 2],  # Up → Y
-    ground_enu[:, 1],  # Nord → Z
-    color='green', s=20, label='Point au sol'
-)
+margin = 10  # mètres pour un zoom fin
+ax.set_xlim(x_min - margin, x_max + margin)
+ax.set_ylim(y_min - margin, y_max + margin)
+ax.set_zlim(z_min - margin, z_max + margin)
 
-# ID texte
-for i, pos in enumerate(satellite_enu):
-    ax.text(pos[0], pos[2], pos[1], str(df_combined["ID"].iloc[i]), color='black', fontsize=8)
-
-# Affichage
+# Labels
+ax.set_title("Distribution des points au sol (ENU)")
+ax.set_xlabel("Est (km)")
+ax.set_ylabel("Nord (km)")
+ax.set_zlabel("Up (km)")
 ax.legend(loc='upper right')
-ax.set_title("Satellites et visées vers le point moyen (ENU)")
-ax.set_xlabel("Est (m)")
-ax.set_ylabel("Up (m)")     # ← Up est maintenant l'axe vertical !
-ax.set_zlabel("Nord (m)")
-
-ax.set_zlim(bottom=0)
 
 plt.tight_layout()
 plt.show()
-
