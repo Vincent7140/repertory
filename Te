@@ -1,0 +1,53 @@
+from scipy.ndimage import gaussian_filter
+
+def compute_color_variance_map(image, sigma=1.0):
+    """
+    Calcule une carte de variance des couleurs en appliquant un filtre gaussien.
+
+    image: [H, W, 3]
+    retourne: [H, W] carte scalaire représentant la variance locale
+    """
+    image_np = image.numpy() if isinstance(image, tf.Tensor) else image
+    grayscale = np.mean(image_np, axis=-1)
+    blurred = gaussian_filter(grayscale, sigma=sigma)
+    variance_map = (grayscale - blurred)**2
+    return variance_map / np.max(variance_map)  # Normalisation entre 0 et 1
+
+
+
+# (après la boucle for view_i in ...)
+# Fusionne tous les rayons et les valeurs
+all_values = tf.reshape(tf.convert_to_tensor(all_values), [-1, nbands])
+all_rays_o = tf.reshape(tf.convert_to_tensor(all_rays_o), [-1, 3])
+all_rays_d = tf.reshape(tf.convert_to_tensor(all_rays_d), [-1, 3])
+
+# Nouvelle partie : pondération des rayons selon la variance
+importance_weights = []
+for img in dataset['train_imgs']:
+    var_map = compute_color_variance_map(img)
+    importance_weights.append(var_map.flatten())
+importance_weights = np.concatenate(importance_weights)
+importance_weights = importance_weights / np.sum(importance_weights)  # Normalise
+
+
+N_keep = arg_dict.get('train.rays.samples', 50000)  # nombre de rayons à garder
+indices = np.random.choice(len(all_rays_o), size=N_keep, replace=False, p=importance_weights)
+
+# Réduction des rayons
+all_train = {
+    'rays_o': tf.gather(all_rays_o, indices),
+    'rays_d': tf.gather(all_rays_d, indices),
+    'values': tf.gather(all_values, indices)
+}
+if use_view_dirs:
+    view_dirs_all = tf.reshape(tf.convert_to_tensor(all_view_dirs), [-1, 2])
+    all_train['view_dirs'] = tf.gather(view_dirs_all, indices)
+if use_light_dirs:
+    light_dirs_all = tf.reshape(tf.convert_to_tensor(all_light_dirs), [-1, 2])
+    all_train['light_dirs'] = tf.gather(light_dirs_all, indices)
+
+
+train.rays.adaptive: True
+
+if arg_dict.get("train.rays.adaptive", False):
+    # Appliquer la méthode adaptative
