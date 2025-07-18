@@ -1,0 +1,102 @@
+def compute_quintile_weights(variance_map, weight_scheme=[5, 4, 3, 2, 1]):
+    """
+    Attribue un poids par pixel en fonction de son quintile de variance.
+    Les pixels les plus variables reçoivent les poids les plus élevés.
+    """
+    flat_var = variance_map.flatten()
+    sorted_indices = np.argsort(-flat_var)  # tri décroissant
+    N = len(flat_var)
+    quintile_size = N // 5
+    weights = np.zeros_like(flat_var, dtype=np.float32)
+
+    for i, w in enumerate(weight_scheme):
+        start = i * quintile_size
+        end = (i+1)*quintile_size if i < 4 else N
+        weights[sorted_indices[start:end]] = w
+
+    return weights.reshape(variance_map.shape)
+
+
+
+    all_rays_o_list, all_rays_d_list, all_values_list = [], [], []
+    if use_view_dirs:
+        all_view_dirs_list = []
+    if use_light_dirs:
+        all_light_dirs_list = []
+
+    for i, img in enumerate(dataset['train_imgs']):
+        pose = dataset['train_poses'][i]
+        focal = dataset['train_focals'][i]
+        view_dir = dataset['train_view_dirs'][i]
+        light_dir = dataset['train_light_dirs'][i]
+
+        H, W, _ = img.shape
+        i_coords, j_coords = tf.meshgrid(tf.range(W), tf.range(H), indexing='xy')
+        i_coords = tf.cast(i_coords, dtype=def_dtype)
+        j_coords = tf.cast(j_coords, dtype=def_dtype)
+
+        dirs = tf.stack([(i_coords - W * 0.5)/focal, -(j_coords - H * 0.5)/focal, -tf.ones_like(i_coords)], -1)
+        rays_d = tf.reduce_sum(dirs[..., None, :] * pose[:3,:3], -1)
+        rays_o = tf.broadcast_to(pose[:3, 3], tf.shape(rays_d))
+
+        pixels = tf.reshape(img, [-1, img.shape[-1]])
+        rays_o = tf.reshape(rays_o, [-1, 3])
+        rays_d = tf.reshape(rays_d, [-1, 3])
+
+        var_map = compute_color_variance_map(img)
+        pixel_weights = compute_quintile_weights(var_map)
+
+        # Réplication des directions
+        if use_view_dirs:
+            view_dirs = tf.broadcast_to(view_dir, [pixels.shape[0], 2])
+        if use_light_dirs:
+            light_dirs = tf.broadcast_to(light_dir, [pixels.shape[0], 2])
+
+        # Appliquer pondération comme répétition (ou autre usage futur)
+        # Pour l'instant, on ne fait que stocker tout
+        all_rays_o_list.append(rays_o)
+        all_rays_d_list.append(rays_d)
+        all_values_list.append(pixels)
+
+        if use_view_dirs:
+            all_view_dirs_list.append(view_dirs)
+        if use_light_dirs:
+            all_light_dirs_list.append(light_dirs)
+
+        # Stocker les poids pour plus tard (optionnel)
+        if i == 0:
+            all_weights = tf.reshape(pixel_weights, [-1])
+        else:
+            all_weights = tf.concat([all_weights, tf.reshape(pixel_weights, [-1])], axis=0)
+
+    all_train = {
+        'rays_o': tf.concat(all_rays_o_list, axis=0),
+        'rays_d': tf.concat(all_rays_d_list, axis=0),
+        'values': tf.concat(all_values_list, axis=0),
+    }
+
+    if use_view_dirs:
+        all_train['view_dirs'] = tf.concat(all_view_dirs_list, axis=0)
+    if use_light_dirs:
+        all_train['light_dirs'] = tf.concat(all_light_dirs_list, axis=0)
+
+    # Stocker les poids pour éventuel ré-échantillonnage dans train_model
+    all_train['weights'] = all_weights
+
+    return all_train
+
+
+
+train_rays = render.shuffle_rays(train_rays, weights=train_rays.get("weights", None))
+
+
+def shuffle_rays(ray_dict, weights=None):
+    """Shuffle les rayons aléatoirement (ou avec des poids s'ils sont fournis)."""
+    N = ray_dict['rays_o'].shape[0]
+    if weights is not None:
+        weights = weights.numpy() if isinstance(weights, tf.Tensor) else weights
+        weights = weights / np.sum(weights)
+        indices = np.random.choice(N, N, replace=False, p=weights)
+    else:
+        indices = np.random.permutation(N)
+    return {k: tf.gather(v, indices) for k, v in ray_dict.items() if v is not None}
