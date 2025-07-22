@@ -1,0 +1,37 @@
+def plot_weight_maps(weight_maps, image_ids=None, path=None):
+    """
+    Affiche les cartes de poids (variance normalisée par pixel) pour un ensemble d'images.
+
+    Parameters:
+    - weight_maps (list[np.ndarray]): Liste de tableaux 2D [H,W] avec les poids par pixel
+    - image_ids (list[str] or int): Identifiants des images (optionnel)
+    - path (str): Dossier pour enregistrer les figures
+    """
+    N = len(weight_maps)
+    cols = 3
+    rows = int(np.ceil(N / cols))
+    fig, ax = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
+    ax = ax.ravel()
+
+    for i, weight_map in enumerate(weight_maps):
+        ax[i].imshow(weight_map, cmap='hot', interpolation='nearest')
+        if image_ids:
+            ax[i].set_title(f"Image {image_ids[i]}")
+        else:
+            ax[i].set_title(f"Weight map {i}")
+        ax[i].axis('off')
+
+    # Si on a moins de sous-plots que prévu
+    for j in range(i+1, len(ax)):
+        ax[j].axis("off")
+
+    if path is None:
+        plt.show()
+    else:
+        os.makedirs(path, exist_ok=True)
+        plt.savefig(os.path.join(path, "weight_maps.png"))
+weight_maps = []
+for img in dataset['train_imgs']:
+    var_map = compute_color_variance_map(img)
+    weights = var_map / (np.max(var_map) + 1e-6)
+    weight_maps.append(weights)
